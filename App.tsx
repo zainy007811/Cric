@@ -1,0 +1,174 @@
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import LiveStreamPlayer from './components/LiveStreamPlayer';
+import StreamCard from './components/StreamCard';
+import AdminPanel from './components/AdminPanel';
+import Header from './components/Header';
+import GoogleSignInScreen from './components/GoogleSignInScreen';
+import { STREAMS } from './constants';
+import type { Stream } from './types';
+
+type Screen = 'home' | 'player' | 'admin';
+
+interface User {
+  email: string;
+}
+
+const CricketBallIcon: React.FC<{ className?: string }> = ({ className }) => (
+  <svg className={className} viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="50" cy="50" r="48" fill="url(#ballGradient)" stroke="#fff" strokeWidth="2"/>
+    <defs>
+      <radialGradient id="ballGradient" cx="0.3" cy="0.3" r="0.7">
+        <stop offset="0%" stopColor="#ff4d4d"/>
+        <stop offset="100%" stopColor="#b30000"/>
+      </radialGradient>
+    </defs>
+    <path d="M 50 2 A 48 48 0 0 0 50 98" stroke="#ffffff" strokeWidth="3" strokeDasharray="8 8" fill="none"/>
+    <path d="M 2 50 A 48 48 0 0 0 98 50" stroke="rgba(255,255,255,0.5)" strokeWidth="1" fill="none"/>
+  </svg>
+);
+
+const FloatingElements: React.FC = () => (
+    <div className="absolute inset-0 -z-10 overflow-hidden">
+        <CricketBallIcon className="absolute top-[10%] left-[5%] w-24 h-24 opacity-10 animate-float" style={{ animationDuration: '20s' }} />
+        <CricketBallIcon className="absolute top-[70%] left-[80%] w-16 h-16 opacity-5 animate-float" style={{ animationDuration: '25s', animationDirection: 'reverse' }} />
+    </div>
+);
+
+
+const App: React.FC = () => {
+  const [streams, setStreams] = useState<Stream[]>(STREAMS);
+  const [activeScreen, setActiveScreen] = useState<Screen>('home');
+  const [selectedStream, setSelectedStream] = useState<Stream | null>(null);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAuthorizedAdmin, setIsAuthorizedAdmin] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [startUnmuted, setStartUnmuted] = useState(false);
+
+  useEffect(() => {
+    const userEmail = sessionStorage.getItem('userEmail');
+    if (userEmail) {
+      setCurrentUser({ email: userEmail });
+      setIsAuthorizedAdmin(true);
+    }
+  }, []);
+  
+  const handleSignIn = useCallback((email: string) => {
+    const profile: User = { email };
+    setCurrentUser(profile);
+    sessionStorage.setItem('userEmail', email);
+    setIsAuthorizedAdmin(true);
+    setActiveScreen('admin');
+  }, []);
+
+  const handleSignOut = useCallback(() => {
+    setCurrentUser(null);
+    setIsAuthorizedAdmin(false);
+    sessionStorage.removeItem('userEmail');
+    setActiveScreen('home');
+  }, []);
+
+  const handleNavigate = (screen: Screen) => {
+    if (screen !== 'player') {
+      setSelectedStream(null);
+    }
+    if (screen === 'home') {
+      setSearchQuery('');
+    }
+    setActiveScreen(screen);
+  };
+
+  const handleSelectStream = (stream: Stream, unmute: boolean = false) => {
+    setSelectedStream(stream);
+    setStartUnmuted(unmute);
+    setActiveScreen('player');
+  };
+
+  const handleAddStream = (stream: Omit<Stream, 'id'>) => {
+    const newStream: Stream = { ...stream, id: Date.now() };
+    setStreams(prevStreams => [...prevStreams, newStream]);
+  };
+
+  const handleUpdateStream = (updatedStream: Stream) => {
+    setStreams(prevStreams =>
+      prevStreams.map(s => (s.id === updatedStream.id ? updatedStream : s))
+    );
+    if (selectedStream && selectedStream.id === updatedStream.id) {
+      setSelectedStream(updatedStream);
+    }
+  };
+
+  const handleDeleteStream = (streamId: number) => {
+    setStreams(prevStreams => prevStreams.filter(s => s.id !== streamId));
+  };
+  
+  const filteredStreams = useMemo(() => {
+    if (!searchQuery) return streams;
+    return streams.filter(stream => 
+      stream.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      stream.channelName.toLowerCase().includes(searchQuery.toLowerCase())
+    );
+  }, [streams, searchQuery]);
+  
+  const renderScreen = () => {
+    switch (activeScreen) {
+      case 'home':
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6" style={{ perspective: '1000px' }}>
+            {filteredStreams.map(stream => (
+              <StreamCard key={stream.id} stream={stream} onSelect={handleSelectStream} />
+            ))}
+            {filteredStreams.length === 0 && (
+                <div className="col-span-full text-center py-20 text-gray-400">
+                    <h2 className="text-2xl font-bold">No streams found</h2>
+                    <p>Try adjusting your search query.</p>
+                </div>
+            )}
+          </div>
+        );
+      case 'player':
+        return selectedStream ? (
+            <div className="max-w-5xl mx-auto animate-fade-in">
+                <LiveStreamPlayer stream={selectedStream} startUnmuted={startUnmuted} />
+            </div>
+        ) : null;
+      case 'admin':
+        if (isAuthorizedAdmin) {
+            return (
+              <div className="max-w-4xl mx-auto animate-fade-in">
+                <AdminPanel
+                  streams={streams}
+                  onAddStream={handleAddStream}
+                  onUpdateStream={handleUpdateStream}
+                  onDeleteStream={handleDeleteStream}
+                  onSignOut={handleSignOut}
+                />
+              </div>
+            );
+        }
+        return <GoogleSignInScreen onSignIn={handleSignIn} />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="bg-stadium bg-cover bg-fixed bg-center text-white min-h-screen font-sans relative isolate">
+      <div className="absolute inset-0 bg-[#05080f]/90 -z-20"></div>
+      <FloatingElements />
+      <Header 
+        activeScreen={activeScreen}
+        onNavigate={handleNavigate}
+        currentUser={currentUser}
+        isAuthorizedAdmin={isAuthorizedAdmin}
+        onSignOut={handleSignOut}
+        searchQuery={searchQuery}
+        setSearchQuery={setSearchQuery}
+      />
+      <main className="container mx-auto p-4 sm:p-6 lg:p-8">
+        {renderScreen()}
+      </main>
+    </div>
+  );
+};
+
+export default App;
