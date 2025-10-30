@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import LiveStreamPlayer from './components/LiveStreamPlayer';
 import StreamCard from './components/StreamCard';
 import AdminPanel from './components/AdminPanel';
@@ -34,15 +34,70 @@ const FloatingElements: React.FC = () => (
     </div>
 );
 
+const LoadingSpinner: React.FC = () => (
+    <div className="flex justify-center items-center py-20">
+        <div className="w-16 h-16 border-4 border-accent/20 border-t-accent rounded-full animate-spin"></div>
+    </div>
+);
 
 const App: React.FC = () => {
+  const [dbUrl, setDbUrl] = useState<string | null>(() => localStorage.getItem('streamsDbUrl'));
   const [streams, setStreams] = useState<Stream[]>(STREAMS);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
   const [activeScreen, setActiveScreen] = useState<Screen>('home');
   const [selectedStream, setSelectedStream] = useState<Stream | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAuthorizedAdmin, setIsAuthorizedAdmin] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [startUnmuted, setStartUnmuted] = useState(false);
+  
+  // Fetch streams on initial load or when the DB URL changes
+  useEffect(() => {
+    const fetchStreams = async () => {
+      setIsLoading(true);
+      if (dbUrl) {
+        try {
+          const response = await fetch(dbUrl);
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          const data = await response.json();
+          setStreams(Array.isArray(data) ? data : []);
+        } catch (error) {
+          console.error("Failed to fetch streams:", error);
+          alert("Error loading streams from the remote source. Please check the URL in the Admin Panel.");
+          setStreams([]);
+        }
+      } else {
+        // Fallback to localStorage if no DB URL
+        try {
+          const savedStreams = localStorage.getItem('cricketStreams');
+          setStreams(savedStreams ? JSON.parse(savedStreams) : STREAMS);
+        } catch (error) {
+          console.error("Failed to load streams from localStorage:", error);
+          setStreams(STREAMS);
+        }
+      }
+      setIsLoading(false);
+    };
+    fetchStreams();
+  }, [dbUrl]);
+
+  const saveStreams = useCallback(async (updatedStreams: Stream[]) => {
+      if (dbUrl) {
+          try {
+              const response = await fetch(dbUrl, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(updatedStreams),
+              });
+              if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+          } catch (error) {
+              console.error("Failed to save streams:", error);
+              alert("Error saving streams. Changes may not be visible on other devices.");
+          }
+      } else {
+          localStorage.setItem('cricketStreams', JSON.stringify(updatedStreams));
+      }
+  }, [dbUrl]);
 
   useEffect(() => {
     const userEmail = sessionStorage.getItem('userEmail');
@@ -85,20 +140,29 @@ const App: React.FC = () => {
 
   const handleAddStream = (stream: Omit<Stream, 'id'>) => {
     const newStream: Stream = { ...stream, id: Date.now() };
-    setStreams(prevStreams => [...prevStreams, newStream]);
+    const updatedStreams = [...streams, newStream];
+    setStreams(updatedStreams);
+    saveStreams(updatedStreams);
   };
 
   const handleUpdateStream = (updatedStream: Stream) => {
-    setStreams(prevStreams =>
-      prevStreams.map(s => (s.id === updatedStream.id ? updatedStream : s))
-    );
+    const updatedStreams = streams.map(s => (s.id === updatedStream.id ? updatedStream : s));
+    setStreams(updatedStreams);
+    saveStreams(updatedStreams);
     if (selectedStream && selectedStream.id === updatedStream.id) {
       setSelectedStream(updatedStream);
     }
   };
 
   const handleDeleteStream = (streamId: number) => {
-    setStreams(prevStreams => prevStreams.filter(s => s.id !== streamId));
+    const updatedStreams = streams.filter(s => s.id !== streamId);
+    setStreams(updatedStreams);
+    saveStreams(updatedStreams);
+  };
+  
+  const handleSetDbUrl = (url: string) => {
+    localStorage.setItem('streamsDbUrl', url);
+    setDbUrl(url);
   };
   
   const filteredStreams = useMemo(() => {
@@ -112,6 +176,7 @@ const App: React.FC = () => {
   const renderScreen = () => {
     switch (activeScreen) {
       case 'home':
+        if (isLoading) return <LoadingSpinner />;
         return (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6" style={{ perspective: '1000px' }}>
             {filteredStreams.map(stream => (
@@ -120,7 +185,7 @@ const App: React.FC = () => {
             {filteredStreams.length === 0 && (
                 <div className="col-span-full text-center py-20 text-gray-400">
                     <h2 className="text-2xl font-bold">No streams found</h2>
-                    <p>Try adjusting your search query.</p>
+                    <p>{searchQuery ? "Try adjusting your search query." : "Add some streams in the Admin Panel."}</p>
                 </div>
             )}
           </div>
@@ -141,6 +206,8 @@ const App: React.FC = () => {
                   onUpdateStream={handleUpdateStream}
                   onDeleteStream={handleDeleteStream}
                   onSignOut={handleSignOut}
+                  dbUrl={dbUrl}
+                  onSetDbUrl={handleSetDbUrl}
                 />
               </div>
             );
